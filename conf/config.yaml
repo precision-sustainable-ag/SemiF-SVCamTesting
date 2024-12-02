@@ -1,0 +1,129 @@
+# Hydra defaults and settings. Ignore these (don't change)
+defaults:
+  - _self_
+  - paths: default
+  
+batch_id: ???
+tasks:
+  - copy_from_lockers
+  # - raw2dng
+
+
+copy_from_lockers:
+  raw_extension: .RAW # either .RAW or .ARW
+
+demosaic:
+  bit_depth: 16  # 8 or 16
+  concurrent: True  # True or False
+  concurrent_workers: 4  # Number of threads for concurrent processing
+  
+# Configuration for ImagePipeline
+max_workers: 4  # Number of threads for concurrent processing
+
+# BBOT version: affects raw image extension
+bbot_version: 3.1  # Set to 3.1 for .RAW or other for .ARW
+
+job_now_date: &nowdir ${now:%Y-%m-%d}
+
+
+colorchecker:
+  reference_colors:
+    - name: "dark skin"
+      rgb: [115, 82, 68]
+    - name: "light skin"
+      rgb: [194, 150, 130]
+    - name: "blue sky"
+      rgb: [98, 122, 157]
+    - name: "foliage"
+      rgb: [87, 108, 67]
+    - name: "blue flower"
+      rgb: [133, 128, 177]
+    - name: "bluish green"
+      rgb: [103, 189, 170]
+    - name: "orange"
+      rgb: [214, 126, 44]
+    - name: "purplish blue"
+      rgb: [80, 91, 166]
+    - name: "moderate red"
+      rgb: [193, 90, 99]
+    - name: "purple"
+      rgb: [94, 60, 108]
+    - name: "yellow green"
+      rgb: [157, 188, 64]
+    - name: "orange yellow"
+      rgb: [224, 163, 46]
+    - name: "blue"
+      rgb: [56, 61, 150]
+    - name: "green"
+      rgb: [70, 148, 73]
+    - name: "red"
+      rgb: [175, 54, 60]
+    - name: "yellow"
+      rgb: [231, 199, 31]
+    - name: "magenta"
+      rgb: [187, 86, 149]
+    - name: "cyan"
+      rgb: [8, 133, 161]
+    - name: "white (0.05*)"
+      rgb: [243, 243, 242]
+    - name: "neutral 8 (0.23*)"
+      rgb: [200, 200, 200]
+    - name: "neutral 6.5 (0.44*)"
+      rgb: [160, 160, 160]
+    - name: "neutral 5 (0.70*)"
+      rgb: [122, 122, 121]
+    - name: "neutral 3.5 (1.05*)"
+      rgb: [85, 85, 85]
+    - name: "black (1.50*)"
+      rgb: [52, 52, 52]
+
+  image_colors: # NC_1733153354_16bit.png
+    - name: "dark skin"
+      rgb: [23.9, 27.1, 11.7]
+    - name: "light skin"
+      rgb: [73.3, 88.2, 39.5]
+    - name: "blue sky"
+      rgb: [27.2, 56.4, 43.0]
+    - name: "foliage"
+      rgb: [19.3, 34.1, 13.0]
+    - name: "blue flower"
+      rgb: [43.4, 67.4, 52.1]
+    - name: "bluish green"
+      rgb: [41.2, 109.4, 60.1]
+    - name: "orange"
+      rgb: [75.9, 65.6, 14.4]
+    - name: "purplish blue"
+      rgb: [17.7, 38.1, 42.5]
+    - name: "moderate red"
+      rgb: [67.0, 48.7, 22.0]
+    - name: "purple"
+      rgb: [17.0, 18.9, 17.1]
+    - name: "yellow green"
+      rgb: [50.7, 95.7, 24.3]
+    - name: "orange yellow"
+      rgb: [86.8, 92.0, 18.9]
+    - name: "blue"
+      rgb: [8.7, 20.6, 28.8]
+    - name: "green"
+      rgb: [18.8, 51.7, 17.6]
+    - name: "red"
+      rgb: [49.2, 28.5, 10.0]
+    - name: "yellow"
+      rgb: [92.3, 117.7, 23.4]
+    - name: "magenta"
+      rgb: [59.9, 48.8, 35.2]
+    - name: "cyan"
+      rgb: [18.8, 63.5, 50.5]
+    - name: "white (0.05*)"
+      rgb: [121.9, 203.1, 110.1]
+    - name: "neutral 8 (0.23*)"
+      rgb: [84.6, 142.9, 79.3]
+    - name: "neutral 6.5 (0.44*)"
+      rgb: [56.1, 95.2, 53.5]
+    - name: "neutral 5 (0.70*)"
+      rgb: [31.6, 52.6, 29.8]
+    - name: "neutral 3.5 (1.05*)"
+      rgb: [15.5, 25.3, 14.9]
+    - name: "black (1.50*)"
+      rgb: [6.0, 8.8, 5.5]
+
