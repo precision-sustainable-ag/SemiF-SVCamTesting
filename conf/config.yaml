@@ -6,6 +6,8 @@ defaults:
 batch_id: ???
 tasks:
   - copy_from_lockers
+  - demosaic
+  - color_correct
   # - raw2dng
 
 
@@ -13,9 +15,14 @@ copy_from_lockers:
   raw_extension: .RAW # either .RAW or .ARW
 
 demosaic:
-  bit_depth: 16  # 8 or 16
+  bit_depth: 8  # 8 or 16
   concurrent: True  # True or False
-  concurrent_workers: 4  # Number of threads for concurrent processing
+  concurrent_workers: 8  # Number of threads for concurrent processing
+  scale_factor: 0.15  # Scale factor for resizing images
+
+color_correct:
+  scale_factor: 1
+
   
 # Configuration for ImagePipeline
 max_workers: 4  # Number of threads for concurrent processing

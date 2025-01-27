@@ -10,7 +10,7 @@ from omegaconf import DictConfig
 log = logging.getLogger(__name__)
 
 
-def process_image(raw_file, im_height, im_width, bit_depth, output_dir):
+def process_image(raw_file, im_height, im_width, bit_depth, output_dir, scale_factor=None):
     nparray = np.fromfile(raw_file, dtype=np.uint16).astype(np.uint16)
     org_reshaped = nparray.reshape((im_height, im_width))
     image_data = org_reshaped.astype(np.float32) / 65535.
@@ -32,6 +32,10 @@ def process_image(raw_file, im_height, im_width, bit_depth, output_dir):
     
     # Save the image
     output_file = output_dir / f"{raw_file.stem}_{bit_depth}bit.png"
+    
+    if scale_factor:
+        bgr_colour_image = cv2.resize(bgr_colour_image, (0, 0), fx=scale_factor, fy=scale_factor)
+    
     cv2.imwrite(str(output_file), bgr_colour_image, [cv2.IMWRITE_PNG_COMPRESSION, 1])
     log.info(f"Saved image to {output_file} with {bit_depth}-bit depth")
 
@@ -40,12 +44,12 @@ def process_image(raw_file, im_height, im_width, bit_depth, output_dir):
 def main(cfg: DictConfig):
     
     # main_dir = Path("/mnt/research-projects/s/screberg/longterm_images2/semifield-upload")
-    main_dir = Path("temp_data/semifield-upload")
+    main_dir = Path("data/raws")
     input_dir = Path(main_dir, cfg.batch_id)
     
     assert input_dir.exists(), "Input directory does not exist"
     
-    output_dir = Path("data/results", cfg.batch_id)
+    output_dir = Path("data/demosaiced", cfg.batch_id)
     output_dir.mkdir(exist_ok=True, parents=True)
 
     # Get the raw image files and filter by epoch
@@ -59,13 +63,14 @@ def main(cfg: DictConfig):
     
     im_height = 9528
     im_width = 13376
+    scale_factor = cfg.demosaic.scale_factor if cfg.demosaic.scale_factor else None
 
     if cfg.demosaic.concurrent:
         # Use ProcessPoolExecutor for parallel processing
         max_workers = min(cfg.demosaic.concurrent_workers, len(raw_files))
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = [
-                executor.submit(process_image, raw_file, im_height, im_width, cfg.demosaic.bit_depth, output_dir)
+                executor.submit(process_image, raw_file, im_height, im_width, cfg.demosaic.bit_depth, output_dir, scale_factor)
                 for raw_file in raw_files
             ]
             for future in futures:

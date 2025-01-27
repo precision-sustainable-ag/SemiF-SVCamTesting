@@ -5,6 +5,7 @@ from omegaconf import OmegaConf  # Do not confuse with dataclass.MISSING
 
 # Import the task functions
 from src.copy_from_lockers import main as copy_from_lockers
+from src.demosaic import main as demosaic
 
 
 log = logging.getLogger(__name__)
@@ -12,6 +13,7 @@ log = logging.getLogger(__name__)
 # Define a registry of tasks
 TASK_REGISTRY = {
     "copy_from_lockers": copy_from_lockers,
+    "demosaic": demosaic,
     # Add more tasks here as needed
 }
 

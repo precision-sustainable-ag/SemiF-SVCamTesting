@@ -109,37 +109,45 @@ def array_info(array: np.ndarray) -> dict:
 
 @hydra.main(version_base="1.3", config_path="../conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-    img_path = Path("/home/mkutuga/SemiF-SVCamTesting/data/results/NC_2024-12-02/NC_1733153354_16bit.png")
-    image = cv2.imread(str(img_path), cv2.IMREAD_UNCHANGED)
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32) / 65535.0
+    imgdir = Path("./data/results/NC_2024-12-18")
+    imgs = list(imgdir.glob("*.png"))
+    # reference_colors = np.array([
+    #         [idx] + [x / 255.0 for x in ref['rgb']]
+    #         for idx, ref in enumerate(cfg.colorchecker.reference_colors, start=1)
+    #     ])
 
-    print("Image info:")
-    pprint(array_info(image))
+    # measured_colors = np.array([
+    #         [idx] + [x / 255.0 for x in meas['rgb']]
+    #         for idx, meas in enumerate(cfg.colorchecker.image_colors, start=1)
+    #     ])
+    # _, matrix_m, matrix_b = get_matrix_m(reference_colors, measured_colors)
+    # _, transformation_matrix = calc_transformation_matrix(matrix_m, matrix_b)
+    # save_matrix(transformation_matrix, "transformation_matrix.npz")
+    
+    for img_path in imgs:
+        if "corrected" in img_path.stem:
+            continue
+        
+        transformation_matrix_file = "transformation_matrix.npz"
+        if Path(transformation_matrix_file).exists():
+            with np.load(transformation_matrix_file) as data:
+                transformation_matrix = data['matrix']
+        else:
+            log.error(f"Transformation matrix file {transformation_matrix_file} not found.")
+            continue
+        image = cv2.imread(str(img_path), cv2.IMREAD_UNCHANGED)
+        # image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32) / 65535.0
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
 
-    reference_colors = np.array([
-        [idx] + [x / 255.0 for x in ref['rgb']]
-        for idx, ref in enumerate(cfg.colorchecker.reference_colors, start=1)
-    ])
+        corrected_img = apply_transformation_matrix(image, transformation_matrix)
+        corrected_dir = Path("data/corrected/NC_2024-12-18")
+        corrected_dir.mkdir(parents=True, exist_ok=True)
 
-    measured_colors = np.array([
-        [idx] + [x / 255.0 for x in meas['rgb']]
-        for idx, meas in enumerate(cfg.colorchecker.image_colors, start=1)
-    ])
-
-    # print("\nReference colors:")
-    # pprint(array_info(reference_colors))
-    # print("\nMeasured colors:")
-    # pprint(array_info(measured_colors))
-
-    _, matrix_m, matrix_b = get_matrix_m(reference_colors, measured_colors)
-    _, transformation_matrix = calc_transformation_matrix(matrix_m, matrix_b)
-
-    save_matrix(transformation_matrix, "transformation_matrix.npz")
-
-    corrected_img = apply_transformation_matrix(image, transformation_matrix)
-
-    bit8_corrected_img = (corrected_img * 255).astype(np.uint8)
-    cv2.imwrite(f"{img_path}_corrected_image_8bit.png", cv2.cvtColor(bit8_corrected_img, cv2.COLOR_RGB2BGR))
+        bit8_corrected_img = (corrected_img * 255).astype(np.uint8)
+        downscale_factor = 0.5
+        downscaled_img = cv2.resize(bit8_corrected_img, (0, 0), fx=downscale_factor, fy=downscale_factor)
+        image_stem = img_path.stem.replace("_16bit", "")
+        cv2.imwrite(f"{corrected_dir}/{image_stem}.jpg", cv2.cvtColor(downscaled_img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 100])
 
 
 if __name__ == "__main__":

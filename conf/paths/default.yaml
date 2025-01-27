@@ -1,5 +1,9 @@
 workdir: ${hydra:runtime.cwd}  # where the code is executed
 primary_nfs: /mnt/research-projects/s/screberg/longterm_images2
-local_upload: ${paths.workdir}/temp_data/semifield-upload/
-semif_developed: ${paths.workdir}/temp_data/semifield-developed-images/
+local_upload: ${paths.workdir}/data/semifield-upload
+demosaiced_upload: ${paths.local_upload}/demosaiced
+colorcorrected_upload: ${paths.local_upload}/colorcorrected
+semif_developed: ${paths.workdir}/data/semifield-developed-images/
 dev_profiles: ${paths.workdir}/semifield-utils/image_development/dev_profiles/
+
+color_matrix: ${paths.workdir}/semifield-utils/image_development/color_matrix/
