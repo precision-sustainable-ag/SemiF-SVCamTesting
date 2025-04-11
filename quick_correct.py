@@ -18,20 +18,45 @@ def parse_arguments():
     # parser.add_argument("demosaicing_method", choices=["cv2"], help="Demosaicing method")
     parser.add_argument("--output_dir", type=str, default="data", help="Directory to save outputs")
     parser.add_argument("--show_downscaled", action="store_true", help="Show downscaled image for selecting crop coords")
+    parser.add_argument("--draw_grid", action="store_true", help="Draw grid on downscaled image")
     parser.add_argument("--save_downscaled", action="store_true", help="Save downscaled image for selecting crop coords")
     parser.add_argument("--scale_factor", type=float, default=0.1, help="Downscale factor for preview (default: 0.25)")
+    parser.add_argument("--get_bboxes", action="store_true", help="Get bounding boxes for crops")
     parser.add_argument("--save_crops", action="store_true", help="Save the 400x400 crops")
     parser.add_argument("--show_crops", action="store_true", help="Show the 400x400 crops")
-    
     parser.add_argument("--bbox_file", type=str, default=None, help="Path to JSON file to save/load bounding boxes")
     parser.add_argument("--use_saved_bboxes", action="store_true", help="Use previously saved bounding boxes from file")
-
+    
     parser.add_argument("--log_csv", type=str, default="data/MD_svcam_config_log.csv", help="Path to the CSV file to append image metadata logs")
     parser.add_argument("--log_metadata", action="store_true", help="Log metadata for each image")
     
-
     
     return parser.parse_args()
+
+def draw_scaled_grid(image, scale_factor, step=500, color=(255, 0, 0), thickness=1):
+    """
+    Draws a grid on the downscaled image that represents full-resolution spacing.
+    
+    Args:
+        image (np.ndarray): Downscaled image
+        scale_factor (float): Downscale factor used
+        step (int): Grid spacing in full-resolution pixels
+        color (tuple): BGR color for grid lines
+        thickness (int): Line thickness
+    """
+    annotated = image.copy()
+    h, w = annotated.shape[:2]
+    scaled_step = int(step * scale_factor)
+
+    for x in range(0, w, scaled_step):
+        cv2.line(annotated, (x, 0), (x, h), color, thickness)
+        cv2.putText(annotated, str(int(x / scale_factor)), (x + 5, 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+    for y in range(0, h, scaled_step):
+        cv2.line(annotated, (0, y), (w, y), color, thickness)
+        cv2.putText(annotated, str(int(y / scale_factor)), (5, y + 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+    return annotated
 
 def log_image_metadata(csv_path, image_name, f_number, focus, flash_power, z_height, note=""):
     file_exists = Path(csv_path).exists()
@@ -165,9 +190,9 @@ def process_raw_image(raw_path, bit_depth, method="cv2", im_height=9528, im_widt
 def main():
     args = parse_arguments()
 
-    base_dir = Path("/home/mkutuga/Downloads")
+    base_dir = Path("data")
     # base_dir = Path("/home/benchbot/benchbot_app/mini_computer_api/")
-    input_dir = base_dir
+    input_dir = base_dir / args.batch
     assert input_dir.exists(), f"❌ Input directory does not exist: {input_dir}"
 
     raw_files = sorted(input_dir.glob("*.RAW"))
@@ -193,6 +218,9 @@ def main():
         if args.show_downscaled or args.save_downscaled:
             print(f"DType: {full_img.dtype}, Shape: {full_img.shape}")
             preview = cv2.resize(full_img, (0, 0), fx=args.scale_factor, fy=args.scale_factor, interpolation=cv2.INTER_AREA)
+            if args.draw_grid:
+                preview = draw_scaled_grid(preview, args.scale_factor, step=int(3000 * args.scale_factor))
+
             if args.save_downscaled:
                 downscaled_path = output_dir / f"{raw_path.stem}_{args.bit_depth}bit_downscaled.png"
                 cv2.imwrite(str(downscaled_path), preview)
@@ -200,53 +228,55 @@ def main():
             # preview = draw_xy_axes(preview, step=int(500 * args.scale_factor))
         else:
             preview = cv2.resize(full_img, (0, 0), fx=args.scale_factor, fy=args.scale_factor, interpolation=cv2.INTER_AREA)
-        boxes = get_multiple_boxes_from_clicks(
-            preview,
-            scale_factor=args.scale_factor,
-            save_file=args.bbox_file if args.save_crops else None,
-            load_file=args.bbox_file if args.use_saved_bboxes else None
-        )
+        
+        if args.get_bboxes:
+            boxes = get_multiple_boxes_from_clicks(
+                preview,
+                scale_factor=args.scale_factor,
+                save_file=args.bbox_file if args.save_crops else None,
+                load_file=args.bbox_file if args.use_saved_bboxes else None
+            )
 
-        if boxes and (args.save_crops or args.show_crops):
-            crop_images = []
-            for i, (x1, y1, x2, y2) in enumerate(boxes):
-                crop = full_img[y1:y2, x1:x2]
-                crop_images.append(crop)
+            if boxes and (args.save_crops or args.show_crops):
+                crop_images = []
+                for i, (x1, y1, x2, y2) in enumerate(boxes):
+                    crop = full_img[y1:y2, x1:x2]
+                    crop_images.append(crop)
 
-                if args.save_crops:
-                    out_path = output_dir / f"{raw_path.stem}_crop_box_{i+1}_{x1}_{y1}_{x2}_{y2}_{args.bit_depth}bit.png"
-                    cv2.imwrite(str(out_path), crop)
-                    print(f"✅ Saved crop: {out_path}")
+                    if args.save_crops:
+                        out_path = output_dir / f"{raw_path.stem}_crop_box_{i+1}_{x1}_{y1}_{x2}_{y2}_{args.bit_depth}bit.png"
+                        cv2.imwrite(str(out_path), crop)
+                        print(f"✅ Saved crop: {out_path}")
 
-                if args.show_crops:
-                    show_image(crop, f"{raw_path.stem}: Crop #{i+1}: ({x1},{y1}) to ({x2},{y2})")
-            # Combine all crops into one image (grid-style layout)
-            if crop_images:
-                # Auto-determine grid shape (e.g., 2 columns)
-                num_cols = 2
-                num_rows = (len(crop_images) + num_cols - 1) // num_cols
+                    if args.show_crops:
+                        show_image(crop, f"{raw_path.stem}: Crop #{i+1}: ({x1},{y1}) to ({x2},{y2})")
+                # Combine all crops into one image (grid-style layout)
+                if crop_images:
+                    # Auto-determine grid shape (e.g., 2 columns)
+                    num_cols = 2
+                    num_rows = (len(crop_images) + num_cols - 1) // num_cols
 
-                max_width = max(c.shape[1] for c in crop_images)
-                max_height = max(c.shape[0] for c in crop_images)
+                    max_width = max(c.shape[1] for c in crop_images)
+                    max_height = max(c.shape[0] for c in crop_images)
 
-                grid_height = num_rows * max_height
-                grid_width = num_cols * max_width
+                    grid_height = num_rows * max_height
+                    grid_width = num_cols * max_width
 
-                combined_image = np.zeros((grid_height, grid_width, 3), dtype=full_img.dtype)
+                    combined_image = np.zeros((grid_height, grid_width, 3), dtype=full_img.dtype)
 
-                for idx, crop in enumerate(crop_images):
-                    row = idx // num_cols
-                    col = idx % num_cols
+                    for idx, crop in enumerate(crop_images):
+                        row = idx // num_cols
+                        col = idx % num_cols
 
-                    y_offset = row * max_height
-                    x_offset = col * max_width
+                        y_offset = row * max_height
+                        x_offset = col * max_width
 
-                    h, w = crop.shape[:2]
-                    combined_image[y_offset:y_offset+h, x_offset:x_offset+w] = crop
+                        h, w = crop.shape[:2]
+                        combined_image[y_offset:y_offset+h, x_offset:x_offset+w] = crop
 
-                combined_output_path = output_dir / f"{raw_path.stem}_combined_crops_{args.bit_depth}bit.png"
-                cv2.imwrite(str(combined_output_path), combined_image)
-                print(f"🧩 Combined image of all crops saved: {combined_output_path}")
+                    combined_output_path = output_dir / f"{raw_path.stem}_combined_crops_{args.bit_depth}bit.png"
+                    cv2.imwrite(str(combined_output_path), combined_image)
+                    print(f"🧩 Combined image of all crops saved: {combined_output_path}")
         
         if log_flag and args.log_metadata:
             # Prompt user for image metadata
