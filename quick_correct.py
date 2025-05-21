@@ -19,6 +19,7 @@ def parse_arguments():
     parser.add_argument("--output_dir", type=str, default="data", help="Directory to save outputs")
     parser.add_argument("--show_downscaled", action="store_true", help="Show downscaled image for selecting crop coords")
     parser.add_argument("--draw_grid", action="store_true", help="Draw grid on downscaled image")
+    parser.add_argument("--save_fullres", action="store_true", help="Save full resolution image")
     parser.add_argument("--save_downscaled", action="store_true", help="Save downscaled image for selecting crop coords")
     parser.add_argument("--scale_factor", type=float, default=0.1, help="Downscale factor for preview (default: 0.25)")
     parser.add_argument("--get_bboxes", action="store_true", help="Get bounding boxes for crops")
@@ -190,7 +191,7 @@ def process_raw_image(raw_path, bit_depth, method="cv2", im_height=9528, im_widt
 def main():
     args = parse_arguments()
 
-    base_dir = Path("data")
+    base_dir = Path("/mnt/research-projects/s/screberg/longterm_images2/semifield-upload")
     # base_dir = Path("/home/benchbot/benchbot_app/mini_computer_api/")
     input_dir = base_dir / args.batch
     assert input_dir.exists(), f"❌ Input directory does not exist: {input_dir}"
@@ -211,8 +212,9 @@ def main():
         else:
             full_img = process_raw_image(raw_path, args.bit_depth)
             # Save full image if needed
-            cv2.imwrite(str(output_path), full_img)
-            print(f"✅ Saved full image: {output_path.name}")
+            if args.save_fullres:
+                cv2.imwrite(str(output_path), full_img)
+                print(f"✅ Saved full image: {output_path.name}")
             log_flag = True
 
         if args.show_downscaled or args.save_downscaled:
