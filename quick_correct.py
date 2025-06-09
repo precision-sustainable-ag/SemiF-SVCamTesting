@@ -17,6 +17,7 @@ def parse_arguments():
     parser.add_argument("--output_dir", type=str, default="data", help="Directory to save outputs")
     parser.add_argument("--save_fullres", action="store_true", help="Save full resolution image")
     parser.add_argument("--save_downscaled", action="store_true", help="Save downscaled image for selecting crop coords")
+    parser.add_argument("--scale_factor", type=float, default=0.15, help="Downscaling factor for preview images (default: 0.15)")
     return parser.parse_args()
 
 def adjust_brightness(img, factor):
@@ -78,7 +79,7 @@ def main():
                 print(f"✅ Saved full image: {output_path.name}")
 
         if args.save_downscaled:
-            preview = cv2.resize(full_img, (0, 0), fx=0.1, fy=0.1, interpolation=cv2.INTER_AREA)
+            preview = cv2.resize(full_img, (0, 0), fx=args.scale_factor, fy=args.scale_factor, interpolation=cv2.INTER_AREA)
             downscaled_path = output_dir / f"{raw_path.stem}_{args.bit_depth}bit_downscaled.png"
             cv2.imwrite(str(downscaled_path), preview)
             print(f"✅ Saved downscaled image: {downscaled_path.name}")
