@@ -68,10 +68,14 @@ def main():
 
     for raw_path in selected:
         output_path = output_dir / f"{raw_path.stem}_{args.bit_depth}bit.png"
+        downscaled_path = output_dir / f"{raw_path.stem}_{args.bit_depth}bit_downscaled.png"
         if output_path.exists():
             print(f"⏩ Skipping processing, already exists: {output_path.name}")
             full_img = cv2.imread(str(output_path), cv2.IMREAD_UNCHANGED)
-        else:
+        elif args.save_downscaled and downscaled_path.exists():
+            print(f"⏩ Skipping downscaled image, already exists: {downscaled_path.name}")
+            continue
+        else:     
             full_img = process_raw_image(raw_path, args.bit_depth)
             full_img = adjust_brightness(full_img, args.brightness)
             if args.save_fullres:
@@ -80,7 +84,6 @@ def main():
 
         if args.save_downscaled:
             preview = cv2.resize(full_img, (0, 0), fx=args.scale_factor, fy=args.scale_factor, interpolation=cv2.INTER_AREA)
-            downscaled_path = output_dir / f"{raw_path.stem}_{args.bit_depth}bit_downscaled.png"
             cv2.imwrite(str(downscaled_path), preview)
             print(f"✅ Saved downscaled image: {downscaled_path.name}")
 
