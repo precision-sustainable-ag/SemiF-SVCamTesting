@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-focus_scores.py - Refactored for extensibility
+focus_scores.py
 
-IMPROVEMENTS:
-- Modular metric system (easy to add new metrics)
-- EXIF metadata extraction (focus, aperture, flash, etc.)
-- Cleaner separation of concerns
-- Better configuration management
-- Type hints throughout
-- Extensible for future enhancements
+Evaluate focus-chart sharpness and lighting/exposure consistency across manually
+recorded imaging conditions such as f-number and flash power.
+
+Notes:
+- Image timing is parsed from the filename epoch token.
+- Aperture, flash power, and related test conditions come from manual metadata.
+- No EXIF metadata is required or used.
 """
 
 from __future__ import annotations
@@ -17,20 +17,15 @@ import argparse
 import csv
 import json
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any, Set, Callable
-from enum import Enum
-
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-
 from ultralytics import YOLO
 
 
@@ -56,16 +51,26 @@ class ProcessingConfig:
 
 @dataclass
 class ImageMetadata:
-    """Metadata extracted from image."""
+    """Metadata derived from filename only."""
     file_name: str
     epoch_raw: Optional[int] = None
     datetime_utc: str = ""
-    focus_distance: Optional[float] = None
-    aperture: Optional[float] = None
-    flash_power: Optional[float] = None
-    iso: Optional[int] = None
-    exposure_time: Optional[float] = None
-    focal_length: Optional[float] = None
+
+
+@dataclass
+class RegionLightingMetrics:
+    """Lighting / tonal metrics for a masked region."""
+    mean_intensity: float
+    median_intensity: float
+    std_intensity: float
+    min_intensity: float
+    max_intensity: float
+    p1_intensity: float
+    p99_intensity: float
+    dynamic_range: float
+    shadow_clip_pct: float
+    highlight_clip_pct: float
+    rms_contrast: float
 
 
 @dataclass
@@ -76,6 +81,12 @@ class FocusResult:
     full_image_score: float
     polygon_scores: List[float]
     avg_score: float
+    polygon_score_min: float
+    polygon_score_max: float
+    polygon_score_std: float
+    polygon_score_range: float
+    full_image_lighting: RegionLightingMetrics
+    polygon_lighting: List[RegionLightingMetrics]
     polygons_file: str
     preview_max: int
     run_time_local: str
@@ -203,55 +214,49 @@ def detect_polygons_with_yolo(
     return polygons
 
 # ----------------------------
-# EXIF Metadata Extraction
+# Lighting metrics
 # ----------------------------
 
-def extract_exif_metadata(image_path: Path) -> Dict[str, Any]:
-    """
-    Extract EXIF metadata from image.
-    Returns dict with focus_distance, aperture, flash_power, etc.
-    
-    Note: Requires PIL/Pillow for EXIF extraction.
-    """
-    try:
-        from PIL import Image
-        from PIL.ExifTags import TAGS, GPSTAGS
-        
-        img = Image.open(image_path)
-        exif_data = img._getexif()
-        
-        if not exif_data:
-            return {}
-        
-        metadata = {}
-        
-        # Map EXIF tags to readable names
-        for tag_id, value in exif_data.items():
-            tag_name = TAGS.get(tag_id, tag_id)
-            
-            # Extract specific fields
-            if tag_name == "FNumber":  # Aperture
-                metadata["aperture"] = float(value) if isinstance(value, (int, float)) else None
-            elif tag_name == "ISOSpeedRatings":
-                metadata["iso"] = int(value) if value else None
-            elif tag_name == "ExposureTime":
-                metadata["exposure_time"] = float(value) if isinstance(value, (int, float)) else None
-            elif tag_name == "FocalLength":
-                metadata["focal_length"] = float(value) if isinstance(value, (int, float)) else None
-            elif tag_name == "SubjectDistance":
-                metadata["focus_distance"] = float(value) if isinstance(value, (int, float)) else None
-            elif tag_name == "Flash":
-                # Flash is a bitfield - extract power if available
-                metadata["flash_power"] = None  # TODO: parse flash bitfield
-        
-        return metadata
-        
-    except ImportError:
-        logger.warning("PIL/Pillow not installed - EXIF extraction unavailable")
-        return {}
-    except Exception as e:
-        logger.debug(f"Could not extract EXIF from {image_path}: {e}")
-        return {}
+def compute_region_lighting_metrics(
+    gray: np.ndarray,
+    mask: np.ndarray,
+    shadow_threshold: int = 5,
+    highlight_threshold: int = 250,
+) -> RegionLightingMetrics:
+    """Compute brightness / clipping metrics within a masked region."""
+    vals = gray[mask > 0].astype(np.float64)
+    if vals.size < 10:
+        nan = float("nan")
+        return RegionLightingMetrics(
+            mean_intensity=nan,
+            median_intensity=nan,
+            std_intensity=nan,
+            min_intensity=nan,
+            max_intensity=nan,
+            p1_intensity=nan,
+            p99_intensity=nan,
+            dynamic_range=nan,
+            shadow_clip_pct=nan,
+            highlight_clip_pct=nan,
+            rms_contrast=nan,
+        )
+
+    p1 = float(np.percentile(vals, 1))
+    p99 = float(np.percentile(vals, 99))
+    mean_val = float(vals.mean())
+    return RegionLightingMetrics(
+        mean_intensity=mean_val,
+        median_intensity=float(np.median(vals)),
+        std_intensity=float(vals.std()),
+        min_intensity=float(vals.min()),
+        max_intensity=float(vals.max()),
+        p1_intensity=p1,
+        p99_intensity=p99,
+        dynamic_range=float(p99 - p1),
+        shadow_clip_pct=float(((vals <= shadow_threshold).mean()) * 100.0),
+        highlight_clip_pct=float(((vals >= highlight_threshold).mean()) * 100.0),
+        rms_contrast=float(vals.std()),
+    )
 
 
 # ----------------------------
@@ -299,7 +304,7 @@ def match_manual_metadata(epoch_val: Optional[int], manual_data: List[Dict]) -> 
     if epoch_val > 10_000_000_000:
         epoch_val = epoch_val // 1000
     
-    print(f"Matching epoch {epoch_val} against manual metadata...")
+    logger.debug(f"Matching epoch {epoch_val} against manual metadata")
     for entry in manual_data:
         if entry['start_epoch'] <= epoch_val <= entry['end_epoch']:
             return {
@@ -311,7 +316,7 @@ def match_manual_metadata(epoch_val: Optional[int], manual_data: List[Dict]) -> 
                 'comment': entry['comment'],
             }
         else:
-            print(f"Epoch {epoch_val} not in range {entry['start_epoch']} - {entry['end_epoch']}")
+            logger.debug(f"Epoch {epoch_val} not in range {entry['start_epoch']} - {entry['end_epoch']}")
     
     return {}
 
@@ -344,23 +349,14 @@ def epoch_to_datetime_str(epoch_val: Optional[int]) -> str:
 
 
 def extract_image_metadata(image_path: Path, tz: str) -> ImageMetadata:
-    """Extract all metadata from image file."""
+    """Extract metadata from the filename epoch only."""
     epoch_val = parse_epoch_from_filename(image_path.name)
     dt_str = epoch_to_datetime_str(epoch_val)
-    
-    # Extract EXIF data
-    exif_data = extract_exif_metadata(image_path)
-    
+
     return ImageMetadata(
         file_name=str(image_path),
         epoch_raw=epoch_val,
         datetime_utc=dt_str,
-        focus_distance=exif_data.get("focus_distance"),
-        aperture=exif_data.get("aperture"),
-        flash_power=exif_data.get("flash_power"),
-        iso=exif_data.get("iso"),
-        exposure_time=exif_data.get("exposure_time"),
-        focal_length=exif_data.get("focal_length"),
     )
 
 
@@ -555,6 +551,30 @@ def validate_polygons_payload(payload: Dict[str, Any], required_count: int = 4) 
             raise ValueError(f"polygons file missing '{k}'")
 
 
+
+
+def summarize_polygon_scores(scores: List[float]) -> Dict[str, float]:
+    """Summarize polygon focus scores for consistency analysis."""
+    arr = np.array(scores, dtype=float)
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        nan = float("nan")
+        return {
+            "avg": nan,
+            "min": nan,
+            "max": nan,
+            "std": nan,
+            "range": nan,
+        }
+
+    return {
+        "avg": float(finite.mean()),
+        "min": float(finite.min()),
+        "max": float(finite.max()),
+        "std": float(finite.std()),
+        "range": float(finite.max() - finite.min()),
+    }
+
 # ----------------------------
 # Visualization
 # ----------------------------
@@ -631,54 +651,29 @@ def create_focus_plot(
     
     # Prepare metadata text
     metadata_lines = [
-        f"File: {result.metadata.file_name}",
+        f"File: {Path(result.metadata.file_name).name}",
         f"Metric: {result.metric}",
         f"Avg Score: {result.avg_score:.2f}" if not np.isnan(result.avg_score) else "Avg Score: N/A",
         f"Full Image Score: {result.full_image_score:.2f}" if not np.isnan(result.full_image_score) else "Full Image Score: N/A",
+        f"Min/Max Poly: {result.polygon_score_min:.2f} / {result.polygon_score_max:.2f}" if not np.isnan(result.polygon_score_min) else "Min/Max Poly: N/A",
+        f"Poly Std: {result.polygon_score_std:.2f}" if not np.isnan(result.polygon_score_std) else "Poly Std: N/A",
+        f"Poly Range: {result.polygon_score_range:.2f}" if not np.isnan(result.polygon_score_range) else "Poly Range: N/A",
+        f"Full Mean: {result.full_image_lighting.mean_intensity:.1f}" if not np.isnan(result.full_image_lighting.mean_intensity) else "Full Mean: N/A",
+        f"Full Clip Low/High: {result.full_image_lighting.shadow_clip_pct:.2f}% / {result.full_image_lighting.highlight_clip_pct:.2f}%" if not np.isnan(result.full_image_lighting.shadow_clip_pct) else "Full Clip Low/High: N/A",
     ]
 
-
-    # NEW: Add manual metadata first (if available)
     if manual_meta.get('manual_focus'):
         metadata_lines.append(f"Focus (manual): {manual_meta['manual_focus']}")
-    elif result.metadata.focus_distance is not None:
-        metadata_lines.append(f"Focus: {result.metadata.focus_distance:.2f}m")
-    
     if manual_meta.get('manual_aperture'):
         metadata_lines.append(f"Aperture (manual): f/{manual_meta['manual_aperture']}")
-    elif result.metadata.aperture is not None:
-        metadata_lines.append(f"Aperture: f/{result.metadata.aperture:.1f}")
-    
     if manual_meta.get('manual_flash_power'):
         metadata_lines.append(f"Flash (manual): {manual_meta['manual_flash_power']}")
-    elif result.metadata.flash_power is not None:
-        metadata_lines.append(f"Flash: {result.metadata.flash_power}")
-    
+    if manual_meta.get('camera_height_cm'):
+        metadata_lines.append(f"Camera Height (cm): {manual_meta['camera_height_cm']}")
+    if manual_meta.get('focus_card_height_agl'):
+        metadata_lines.append(f"Card Height AGL: {manual_meta['focus_card_height_agl']}")
     if result.metadata.datetime_utc:
         metadata_lines.append(f"DateTime: {result.metadata.datetime_utc}")
-    
-    if result.metadata.focus_distance is not None:
-        metadata_lines.append(f"Focus: {result.metadata.focus_distance:.2f}m")
-    
-    if result.metadata.aperture is not None:
-        metadata_lines.append(f"Aperture: f/{result.metadata.aperture:.1f}")
-    
-    if result.metadata.flash_power is not None:
-        metadata_lines.append(f"Flash: {result.metadata.flash_power}")
-    
-    if result.metadata.iso is not None:
-        metadata_lines.append(f"ISO: {result.metadata.iso}")
-    
-    if result.metadata.exposure_time is not None:
-        # Format exposure time nicely
-        exp_time = result.metadata.exposure_time
-        if exp_time < 1:
-            metadata_lines.append(f"Shutter: 1/{int(1/exp_time)}s")
-        else:
-            metadata_lines.append(f"Shutter: {exp_time:.3f}s")
-    
-    if result.metadata.focal_length is not None:
-        metadata_lines.append(f"Focal Length: {result.metadata.focal_length:.0f}mm")
     
     metadata_text = '\n'.join(metadata_lines)
     
@@ -739,16 +734,45 @@ CSV_HEADERS = [
     "metric",
     "full_image_score",
     "avg_score",
+    "polygon_score_min",
+    "polygon_score_max",
+    "polygon_score_std",
+    "polygon_score_range",
     "poly1_score",
     "poly2_score",
     "poly3_score",
     "poly4_score",
-    "focus_distance",
-    "aperture",
-    "flash_power",
-    "iso",
-    "exposure_time",
-    "focal_length",
+    "full_mean_intensity",
+    "full_median_intensity",
+    "full_std_intensity",
+    "full_min_intensity",
+    "full_max_intensity",
+    "full_p1_intensity",
+    "full_p99_intensity",
+    "full_dynamic_range",
+    "full_shadow_clip_pct",
+    "full_highlight_clip_pct",
+    "full_rms_contrast",
+    "poly1_mean_intensity",
+    "poly1_std_intensity",
+    "poly1_shadow_clip_pct",
+    "poly1_highlight_clip_pct",
+    "poly1_dynamic_range",
+    "poly2_mean_intensity",
+    "poly2_std_intensity",
+    "poly2_shadow_clip_pct",
+    "poly2_highlight_clip_pct",
+    "poly2_dynamic_range",
+    "poly3_mean_intensity",
+    "poly3_std_intensity",
+    "poly3_shadow_clip_pct",
+    "poly3_highlight_clip_pct",
+    "poly3_dynamic_range",
+    "poly4_mean_intensity",
+    "poly4_std_intensity",
+    "poly4_shadow_clip_pct",
+    "poly4_highlight_clip_pct",
+    "poly4_dynamic_range",
     "polygons_file",
     "preview_max",
     "run_time_local",
@@ -760,11 +784,11 @@ def result_to_csv_row(result: FocusResult, manual_meta: Dict[str, str] = None) -
     """Convert FocusResult to CSV row."""
     if manual_meta is None:
         manual_meta = {}
-    
+
     row = {
-        "file_name": result.metadata.file_name,  # Now full path
+        "file_name": result.metadata.file_name,
         "epoch_raw": "" if result.metadata.epoch_raw is None else str(result.metadata.epoch_raw),
-        "datetime_utc": result.metadata.datetime_utc,  # Renamed field
+        "datetime_utc": result.metadata.datetime_utc,
         "manual_focus": manual_meta.get('manual_focus', ''),
         "manual_aperture": manual_meta.get('manual_aperture', ''),
         "manual_flash_power": manual_meta.get('manual_flash_power', ''),
@@ -774,21 +798,39 @@ def result_to_csv_row(result: FocusResult, manual_meta: Dict[str, str] = None) -
         "metric": result.metric,
         "full_image_score": result.full_image_score,
         "avg_score": result.avg_score,
+        "polygon_score_min": result.polygon_score_min,
+        "polygon_score_max": result.polygon_score_max,
+        "polygon_score_std": result.polygon_score_std,
+        "polygon_score_range": result.polygon_score_range,
         "poly1_score": result.polygon_scores[0] if len(result.polygon_scores) > 0 else "",
         "poly2_score": result.polygon_scores[1] if len(result.polygon_scores) > 1 else "",
         "poly3_score": result.polygon_scores[2] if len(result.polygon_scores) > 2 else "",
         "poly4_score": result.polygon_scores[3] if len(result.polygon_scores) > 3 else "",
-        "focus_distance": result.metadata.focus_distance or "",
-        "aperture": result.metadata.aperture or "",
-        "flash_power": result.metadata.flash_power or "",
-        "iso": result.metadata.iso or "",
-        "exposure_time": result.metadata.exposure_time or "",
-        "focal_length": result.metadata.focal_length or "",
+        "full_mean_intensity": result.full_image_lighting.mean_intensity,
+        "full_median_intensity": result.full_image_lighting.median_intensity,
+        "full_std_intensity": result.full_image_lighting.std_intensity,
+        "full_min_intensity": result.full_image_lighting.min_intensity,
+        "full_max_intensity": result.full_image_lighting.max_intensity,
+        "full_p1_intensity": result.full_image_lighting.p1_intensity,
+        "full_p99_intensity": result.full_image_lighting.p99_intensity,
+        "full_dynamic_range": result.full_image_lighting.dynamic_range,
+        "full_shadow_clip_pct": result.full_image_lighting.shadow_clip_pct,
+        "full_highlight_clip_pct": result.full_image_lighting.highlight_clip_pct,
+        "full_rms_contrast": result.full_image_lighting.rms_contrast,
         "polygons_file": result.polygons_file,
         "preview_max": result.preview_max,
         "run_time_local": result.run_time_local,
         "comments": result.comments,
     }
+
+    for idx in range(4):
+        metrics = result.polygon_lighting[idx] if idx < len(result.polygon_lighting) else None
+        row[f"poly{idx + 1}_mean_intensity"] = metrics.mean_intensity if metrics else ""
+        row[f"poly{idx + 1}_std_intensity"] = metrics.std_intensity if metrics else ""
+        row[f"poly{idx + 1}_shadow_clip_pct"] = metrics.shadow_clip_pct if metrics else ""
+        row[f"poly{idx + 1}_highlight_clip_pct"] = metrics.highlight_clip_pct if metrics else ""
+        row[f"poly{idx + 1}_dynamic_range"] = metrics.dynamic_range if metrics else ""
+
     return row
 
 
@@ -899,11 +941,13 @@ def compute_focus_for_image(
     masks_full = polygons_to_masks((full_h, full_w), polygons_full)
 
     scores = [FocusMetrics.compute(gray_full, m, config.metric) for m in masks_full]
-    avg_score = float(np.nanmean(np.array(scores, dtype=float))) if any(np.isfinite(scores)) else float("nan")
+    score_summary = summarize_polygon_scores(scores)
 
-    # Compute full image score
+    # Compute full image score and lighting metrics
     full_mask = np.ones((full_h, full_w), dtype=np.uint8) * 255
     full_image_score = FocusMetrics.compute(gray_full, full_mask, config.metric)
+    full_image_lighting = compute_region_lighting_metrics(gray_full, full_mask)
+    polygon_lighting = [compute_region_lighting_metrics(gray_full, m) for m in masks_full]
 
     # Extract metadata
     metadata = extract_image_metadata(image_path, config.tz)
@@ -913,8 +957,14 @@ def compute_focus_for_image(
         metadata=metadata,
         metric=config.metric,
         polygon_scores=scores,
-        avg_score=avg_score,
+        avg_score=score_summary["avg"],
+        polygon_score_min=score_summary["min"],
+        polygon_score_max=score_summary["max"],
+        polygon_score_std=score_summary["std"],
+        polygon_score_range=score_summary["range"],
         full_image_score=full_image_score,
+        full_image_lighting=full_image_lighting,
+        polygon_lighting=polygon_lighting,
         polygons_file=str(config.polygons_path),
         preview_max=config.preview_max,
         run_time_local=datetime.now(ZoneInfo(config.tz)).isoformat(),
