@@ -36,7 +36,7 @@ def select_raw_files(raw_files, mode, number):
     elif mode == "last":
         return raw_files[-number:]
     elif mode == "random":
-        return random.sample(raw_files, min(number, len(raw_files)))
+        return sorted(random.sample(raw_files, min(number, len(raw_files))))
     elif mode == "index":
         return [raw_files[number]]
     return []
@@ -77,12 +77,14 @@ def main():
             continue
         else:     
             full_img = process_raw_image(raw_path, args.bit_depth)
-            full_img = adjust_brightness(full_img, args.brightness)
+            if args.brightness != 1.0:
+                print(f"🔆 Adjusting brightness by factor: {args.brightness}")
+                full_img = adjust_brightness(full_img, args.brightness)
             if args.save_fullres:
                 cv2.imwrite(str(output_path), full_img)
                 print(f"✅ Saved full image: {output_path.name}")
 
-        if args.save_downscaled:
+        if args.save_downscaled and not downscaled_path.exists():
             preview = cv2.resize(full_img, (0, 0), fx=args.scale_factor, fy=args.scale_factor, interpolation=cv2.INTER_AREA)
             cv2.imwrite(str(downscaled_path), preview)
             print(f"✅ Saved downscaled image: {downscaled_path.name}")

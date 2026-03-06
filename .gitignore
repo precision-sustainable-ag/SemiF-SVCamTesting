@@ -1,5 +1,11 @@
 notebooks/*
 outputs/*
+archive
+focus_scores_plots
+job_*
+zoysia
+zoysia_images
+runs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
